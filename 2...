@@ -1,0 +1,162 @@
+java
+package com.example.mathsolver;
+
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class Solver {
+
+    public static final class Result {
+        public final String key;
+        public final String answer;
+        Result(String key, String answer) { this.key = key; this.answer = answer; }
+    }
+
+    private static final Map<String, Integer> NUMW = new HashMap<>();
+    private static final Map<String, Character> OPW = new HashMap<>();
+    static {
+        String[] ones = {"sifir", "bir", "iki", "uc", "dort", "bes", "alti", "yedi", "sekiz", "dokuz"};
+        for (int i = 0; i < ones.length; i++) NUMW.put(ones[i], i);
+        String[] tens = {"on", "yirmi", "otuz", "kirk", "elli", "altmis", "yetmis", "seksen", "doksan"};
+        for (int i = 0; i < tens.length; i++) NUMW.put(tens[i], (i + 1) * 10);
+        NUMW.put("yuz", 100);
+        NUMW.put("bin", 1000);
+
+        OPW.put("arti", '+');
+        OPW.put("topla", '+');
+        OPW.put("eksi", '-');
+        OPW.put("carpi", '*');
+        OPW.put("kere", '*');
+        OPW.put("x", '*');
+        OPW.put("bolu", '/');
+    }
+
+    private static final Pattern TOKEN = Pattern.compile("(\\d+(?:[.,]\\d+)?)|([a-z]+)|(\\S)");
+
+    private static final class Tok {
+        final char t;
+        final double v;
+        final char op;
+        Tok(char t, double v, char op) { this.t = t; this.v = v; this.op = op; }
+    }
+
+    static String norm(String s) {
+        s = Normalizer.normalize(s, Normalizer.Form.NFKC);
+        s = s.replaceAll("\u00A7.", "");
+        s = s.replaceAll("[\\u200B-\\u200F\\u2060\\uFEFF\\u00AD]", "");
+        s = s.toLowerCase(Locale.ROOT);
+        s = Normalizer.normalize(s, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+        s = s.replace('\u0131', 'i');
+        s = s.replaceAll("[\\u00D7\\u2715\\u2716\\u2A2F\\u22C5\\u2217]", "*");
+        s = s.replaceAll("[\\u00F7\\u2797\\u2215\\u2044]", "/");
+        s = s.replace('\u2795', '+');
+        s = s.replaceAll("[\\u2796\\u2212\\u2013\\u2014\\u2012\\uFE63]", "-");
+        return s;
+    }
+
+    private static Double words(List<String> ws) {
+        long total = 0, cur = 0;
+        for (String w : ws) {
+            Integer v = NUMW.get(w);
+            if (v == null) return null;
+            if (v == 100) cur = (cur == 0 ? 1 : cur) * 100;
+            else if (v == 1000) { total += (cur == 0 ? 1 : cur) * 1000; cur = 0; }
+            else cur += v;
+        }
+        return (double) (total + cur);
+    }
+
+    public static Result solve(String text, boolean strict) {
+        if (text == null || text.isEmpty()) return null;
+        String s = norm(text);
+
+        List<String[]> raw = new ArrayList<>();
+        Matcher m = TOKEN.matcher(s);
+        while (m.find()) {
+            if (m.group(1) != null) raw.add(new String[]{"D", m.group(1)});
+            else if (m.group(2) != null) raw.add(new String[]{"W", m.group(2)});
+            else raw.add(new String[]{"P", m.group(3)});
+        }
+
+        List<Tok> toks = new ArrayList<>();
+        int i = 0;
+        while (i < raw.size()) {
+            String[] r = raw.get(i);
+            if (r[0].equals("D")) {
+                toks.add(new Tok('N', Double.parseDouble(r[1].replace(',', '.')), ' '));
+                i++;
+            } else if (r[0].equals("W")) {
+                if (NUMW.containsKey(r[1])) {
+                    List<String> ws = new ArrayList<>();
+                    int j = i;
+                    while (j < raw.size() && raw.get(j)[0].equals("W") && NUMW.containsKey(raw.get(j)[1])) {
+                        ws.add(raw.get(j)[1]);
+                        j++;
+                    }
+                    Double v = words(ws);
+                    toks.add(v != null ? new Tok('N', v, ' ') : new Tok('S', 0, ' '));
+                    i = j;
+                } else if (OPW.containsKey(r[1])) {
+                    toks.add(new Tok('O', 0, OPW.get(r[1])));
+                    i++;
+                } else {
+                    toks.add(new Tok('S', 0, ' '));
+                    i++;
+                }
+            } else {
+                char c = r[1].charAt(0);
+                if (c == '+' || c == '-' || c == '*' || c == '/') toks.add(new Tok('O', 0, c));
+                else if (c == '=' || c == '?') toks.add(new Tok('E', 0, c));
+                else toks.add(new Tok('S', 0, ' '));
+                i++;
+            }
+        }
+
+        int bs = -1, be = -1, fs = -1, fe = -1;
+        for (int a = 0; a < toks.size(); a++) {
+            if (toks.get(a).t != 'N') continue;
+            int e = a;
+            while (e + 2 < toks.size() && toks.get(e + 1).t == 'O' && toks.get(e + 2).t == 'N') e += 2;
+            if (e > a) {
+                boolean term = e + 1 < toks.size() && toks.get(e + 1).t == 'E';
+                if (term) { bs = a; be = e; break; }
+                if (!strict && fs < 0) { fs = a; fe = e; }
+            }
+            a = e;
+        }
+        if (bs < 0) { bs = fs; be = fe; }
+        if (bs < 0) return null;
+
+        List<Double> vals = new ArrayList<>();
+        List<Character> adds = new ArrayList<>();
+        StringBuilder key = new StringBuilder();
+        vals.add(toks.get(bs).v);
+        key.append(toks.get(bs).v);
+        for (int k = bs + 1; k <= be; k += 2) {
+            char op = toks.get(k).op;
+            double n = toks.get(k + 1).v;
+            key.append(op).append(n);
+            int last = vals.size() - 1;
+            if (op == '*') vals.set(last, vals.get(last) * n);
+            else if (op == '/') {
+                if (n == 0) return null;
+                vals.set(last, vals.get(last) / n);
+            } else { adds.add(op); vals.add(n); }
+        }
+        double res = vals.get(0);
+        for (int k = 0; k < adds.size(); k++) {
+            res = adds.get(k) == '+' ? res + vals.get(k + 1) : res - vals.get(k + 1);
+        }
+
+        String ans;
+        if (Math.abs(res - Math.rint(res)) < 1e-9) ans = String.valueOf((long) Math.rint(res));
+        else ans = String.format(Locale.ROOT, "%.2f", res).replaceAll("0+$", "").replaceAll("\\.$", "");
+        return new Result(key.toString(), ans);
+    }
+}
